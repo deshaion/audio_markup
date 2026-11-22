@@ -109,6 +109,55 @@ fn arrow_keys_select_rows_in_table_order_and_leave_cell_editing_alone() {
 }
 
 #[test]
+fn cell_navigation_retains_the_row_and_column_when_editing_ends() {
+    use crate::markers::MarkerColumn;
+    use egui::{Key, Modifiers};
+
+    let (ctx, mut app, _, _) = app();
+    app.dispatch(Command::AddMarker);
+    let first = app.session.markers()[0].id;
+    let second = app.session.markers()[1].id;
+    let title = egui::Id::unique(("audio-markup-marker", first, "Title"));
+    let artist = egui::Id::unique(("audio-markup-marker", second, "Artist"));
+
+    tap(&ctx, &mut app, Key::ArrowDown, Modifiers::NONE);
+    tap(&ctx, &mut app, Key::ArrowLeft, Modifiers::NONE);
+    assert!(app.state.active_column == MarkerColumn::Position);
+    for _ in 0..3 {
+        tap(&ctx, &mut app, Key::ArrowRight, Modifiers::NONE);
+    }
+    assert_eq!(app.state.selected, Some(first));
+    assert!(app.state.active_column == MarkerColumn::Title);
+    assert_eq!(ctx.memory(|memory| memory.focused()), None);
+
+    tap(&ctx, &mut app, Key::Enter, Modifiers::NONE);
+    assert_eq!(ctx.memory(|memory| memory.focused()), Some(title));
+    frame(&ctx, &mut app, vec![egui::Event::Text("AC".into())]);
+    tap(&ctx, &mut app, Key::ArrowLeft, Modifiers::NONE);
+    frame(&ctx, &mut app, vec![egui::Event::Text("B".into())]);
+    assert_eq!(app.session.markers()[0].data.title, "ABC");
+    assert_eq!(ctx.memory(|memory| memory.focused()), Some(title));
+
+    tap(&ctx, &mut app, Key::Escape, Modifiers::NONE);
+    assert_eq!(ctx.memory(|memory| memory.focused()), None);
+    assert_eq!(app.state.selected, Some(first));
+    assert!(app.state.active_column == MarkerColumn::Title);
+    tap(&ctx, &mut app, Key::ArrowLeft, Modifiers::NONE);
+    tap(&ctx, &mut app, Key::ArrowDown, Modifiers::NONE);
+    assert_eq!(app.state.selected, Some(second));
+    assert!(app.state.active_column == MarkerColumn::Artist);
+    tap(&ctx, &mut app, Key::Enter, Modifiers::NONE);
+    assert_eq!(ctx.memory(|memory| memory.focused()), Some(artist));
+    frame(
+        &ctx,
+        &mut app,
+        vec![egui::Event::Paste("Artist - Title".into())],
+    );
+    assert_eq!(app.session.markers()[1].data.artist, "Artist");
+    assert_eq!(app.session.markers()[1].data.title, "Title");
+}
+
+#[test]
 fn selecting_an_offscreen_marker_scrolls_it_into_view() {
     let (ctx, mut app, _, _) = app();
     for _ in 0..30 {
@@ -128,6 +177,31 @@ fn selecting_an_offscreen_marker_scrolls_it_into_view() {
             .interact_rect
             .is_positive()
     );
+}
+
+#[test]
+fn enter_can_edit_a_row_as_it_scrolls_into_view() {
+    use egui::{Key, Modifiers};
+
+    let (ctx, mut app, _, _) = app();
+    for _ in 0..30 {
+        app.dispatch(Command::AddMarker);
+    }
+    let last = app.session.markers().last().unwrap().id;
+    let field = egui::Id::unique(("audio-markup-marker", last, "Pos"));
+
+    frame(&ctx, &mut app, vec![]);
+    frame(
+        &ctx,
+        &mut app,
+        vec![
+            key(Key::ArrowUp, Modifiers::NONE, true),
+            key(Key::Enter, Modifiers::NONE, true),
+        ],
+    );
+    frame(&ctx, &mut app, vec![]);
+    assert_eq!(app.state.selected, Some(last));
+    assert_eq!(ctx.memory(|memory| memory.focused()), Some(field));
 }
 
 #[test]

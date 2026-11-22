@@ -16,17 +16,20 @@ Audio Markup opens a local audio file, lets you mark track starts, and splits th
 
 - Edit **Pos**, **Artist**, and **Title** directly in a scrollable table. The header stays visible while scrolling.
 - Start with one marker at `00:00`. **Add marker** appends and selects a blank row. Deleting the selected row selects its next neighbor, or the previous one if it was last. Markers live in the current session and can be saved as a CUE sheet.
-- Select a row by clicking or focusing a cell. Use **Set from playhead** to capture the current time or **Seek to marker** to jump to the row’s saved position.
+- The table highlights the selected row and outlines its active cell. Clicking a cell selects it and starts editing. Use **Set from playhead** to capture the current time or **Seek to marker** to jump to the row’s saved position.
 - Enter a timestamp as `MM:SS`, `MM:SS.mmm`, or `MM:SS:FF` for CUE frame precision. Invalid timestamps are marked in the table and block export until corrected.
 - Paste `Artist - Title` into the **Artist** cell to fill both metadata fields.
 
 ## Keyboard shortcuts
 
-Click **?** in the toolbar to see all shortcuts. Press `Esc` to leave a cell before moving between rows with the arrow keys.
+Click **?** in the toolbar to see all shortcuts.
 
 | Shortcut | Action |
 | --- | --- |
-| `↑` / `↓` | Select the previous or next marker. |
+| `↑` / `↓` | Select the previous or next marker and keep the active column. |
+| `←` / `→` | Move between **Pos**, **Artist**, and **Title** in the selected row. |
+| `Enter` | Edit the active cell. |
+| `Esc` | Finish editing and keep the same cell active. |
 | `Alt+N` | Add and select a blank marker. |
 | `Alt+D` | Delete the selected marker. |
 | `Alt+↑` | Resume playback. |

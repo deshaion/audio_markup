@@ -37,6 +37,8 @@ pub struct App {
 #[derive(Default)]
 struct UiState {
     selected: Option<MarkerId>,
+    active_column: markers::MarkerColumn,
+    pending_cell_focus: Option<egui::Id>,
     scroll_to_marker: Option<usize>,
     positions: HashMap<MarkerId, markers::PositionDraft>,
     shortcut_help_open: bool,
@@ -411,6 +413,9 @@ impl App {
                     .state
                     .selected
                     .filter(|id| self.session.markers().iter().any(|marker| marker.id == *id));
+                if self.state.selected.is_none() {
+                    self.state.pending_cell_focus = None;
+                }
             }
         }
     }

@@ -10,6 +10,9 @@ enum Action {
     SeekBy(i64),
     MoveUp,
     MoveDown,
+    MoveLeft,
+    MoveRight,
+    EditCell,
     Add,
     Delete,
     Capture,
@@ -26,6 +29,21 @@ const SHORTCUTS: &[(KeyboardShortcut, Action, &str)] = &[
         KeyboardShortcut::new(Modifiers::NONE, Key::ArrowDown),
         Action::MoveDown,
         "Select next marker",
+    ),
+    (
+        KeyboardShortcut::new(Modifiers::NONE, Key::ArrowLeft),
+        Action::MoveLeft,
+        "Select previous cell",
+    ),
+    (
+        KeyboardShortcut::new(Modifiers::NONE, Key::ArrowRight),
+        Action::MoveRight,
+        "Select next cell",
+    ),
+    (
+        KeyboardShortcut::new(Modifiers::NONE, Key::Enter),
+        Action::EditCell,
+        "Edit active cell",
     ),
     (
         KeyboardShortcut::new(Modifiers::ALT, Key::N),
@@ -71,7 +89,10 @@ const SHORTCUTS: &[(KeyboardShortcut, Action, &str)] = &[
 
 impl Action {
     fn is_navigation(self) -> bool {
-        matches!(self, Self::MoveUp | Self::MoveDown)
+        matches!(
+            self,
+            Self::MoveUp | Self::MoveDown | Self::MoveLeft | Self::MoveRight
+        )
     }
 }
 
@@ -80,7 +101,15 @@ impl App {
         if self.state.shortcut_help_open {
             return;
         }
-        let editing = focused_text_edit(context).is_some();
+        if self.state.pending_cell_focus.is_some()
+            && context.input_mut(|input| input.consume_key(Modifiers::NONE, Key::Escape))
+        {
+            self.state.pending_cell_focus = None;
+        }
+        let mut editing = focused_text_edit(context).is_some();
+        let mut widget_focused = context.memory(|memory| memory.focused().is_some());
+        let has_markers = !self.session.markers().is_empty();
+        let mut directional_key = false;
         let actions = context.input_mut(|input| {
             let mut actions = Vec::new();
             input.events.retain(|event| {
@@ -99,8 +128,18 @@ impl App {
                 }) else {
                     return true;
                 };
-                if editing && action.is_navigation() {
-                    return true;
+                if action.is_navigation() {
+                    directional_key = true;
+                    if editing {
+                        return true;
+                    }
+                    widget_focused = false;
+                }
+                if matches!(action, Action::EditCell) {
+                    if widget_focused || editing || !has_markers {
+                        return true;
+                    }
+                    editing = !repeat;
                 }
                 if !repeat || action.is_navigation() || matches!(action, Action::SeekBy(_)) {
                     actions.push(*action);
@@ -110,15 +149,32 @@ impl App {
             actions
         });
 
+        if directional_key {
+            // egui checks directional focus before the app consumes key events.
+            context.memory_mut(|memory| memory.move_focus(egui::FocusDirection::None));
+        }
         for action in actions {
+            if action.is_navigation() {
+                context.memory_mut(|memory| {
+                    if let Some(id) = memory.focused() {
+                        memory.surrender_focus(id);
+                    }
+                });
+            }
             let result = match action {
                 Action::Play => self.execute(Command::SetPlaying(true)),
                 Action::Pause => self.execute(Command::SetPlaying(false)),
                 Action::SeekBy(seconds) => self.execute(Command::SeekBy(seconds)),
                 Action::MoveUp | Action::MoveDown => {
-                    // egui checks directional focus before the app consumes key events.
-                    context.memory_mut(|memory| memory.move_focus(egui::FocusDirection::None));
                     self.move_marker(matches!(action, Action::MoveDown));
+                    Ok(())
+                }
+                Action::MoveLeft | Action::MoveRight => {
+                    self.move_marker_column(matches!(action, Action::MoveRight));
+                    Ok(())
+                }
+                Action::EditCell => {
+                    self.edit_marker_cell();
                     Ok(())
                 }
                 Action::Add => self.add_marker(context),
@@ -140,6 +196,7 @@ impl App {
         });
         if response.clicked() {
             self.state.shortcut_help_open = true;
+            self.state.pending_cell_focus = None;
         }
     }
 
@@ -160,7 +217,7 @@ impl App {
                     }
                 });
             ui.add_space(6.0);
-            ui.label("Press Esc to leave a cell before using ↑ or ↓.");
+            ui.label("Press Esc to finish editing and return to the active cell.");
             ui.add_space(6.0);
             if ui.button("Close").clicked() {
                 ui.close();
