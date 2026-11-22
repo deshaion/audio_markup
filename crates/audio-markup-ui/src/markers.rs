@@ -2,27 +2,75 @@ use audio_markup_engine::{Command, MarkerId, Result, format_marker_time, parse_m
 use eframe::egui::{self, RichText};
 use egui_extras::{Column, TableBuilder};
 
-use crate::{App, shortcuts::focused_text_edit, theme};
+use crate::{App, UiState, shortcuts::focused_text_edit, theme};
 
 pub struct PositionDraft {
     text: String,
     pub error: Option<String>,
 }
 
+#[derive(Clone, Copy, Default, PartialEq, Eq)]
+pub(crate) enum MarkerColumn {
+    #[default]
+    Position,
+    Artist,
+    Title,
+}
+
+impl MarkerColumn {
+    const ALL: [Self; 3] = [Self::Position, Self::Artist, Self::Title];
+
+    fn label(self) -> &'static str {
+        match self {
+            Self::Position => "Pos",
+            Self::Artist => "Artist",
+            Self::Title => "Title",
+        }
+    }
+
+    fn field_id(self, id: MarkerId) -> egui::Id {
+        egui::Id::unique(("audio-markup-marker", id, self.label()))
+    }
+}
+
 impl App {
-    pub(crate) fn move_marker(&mut self, down: bool) {
-        let markers = self.session.markers();
-        let next = match markers
+    fn selected_marker_index(&self) -> Option<usize> {
+        self.session
+            .markers()
             .iter()
             .position(|marker| Some(marker.id) == self.state.selected)
-        {
+    }
+
+    pub(crate) fn move_marker(&mut self, down: bool) {
+        let next = match self.selected_marker_index() {
             Some(index) if down => Some(index + 1),
             Some(index) => index.checked_sub(1),
             None if down => Some(0),
-            None => markers.len().checked_sub(1),
+            None => self.session.markers().len().checked_sub(1),
         };
         if let Some(index) = next {
             self.select_marker(index);
+        }
+    }
+
+    pub(crate) fn move_marker_column(&mut self, right: bool) {
+        let Some(index) = self.selected_marker_index() else {
+            self.select_marker(0);
+            return;
+        };
+        self.select_marker(index);
+        self.state.active_column = match (self.state.active_column, right) {
+            (MarkerColumn::Position, true) | (MarkerColumn::Title, false) => MarkerColumn::Artist,
+            (MarkerColumn::Artist, true) => MarkerColumn::Title,
+            (MarkerColumn::Artist, false) => MarkerColumn::Position,
+            (column, _) => column,
+        };
+    }
+
+    pub(crate) fn edit_marker_cell(&mut self) {
+        self.select_marker(self.selected_marker_index().unwrap_or(0));
+        if let Some(id) = self.state.selected {
+            self.state.pending_cell_focus = Some(self.state.active_column.field_id(id));
         }
     }
 
@@ -44,6 +92,7 @@ impl App {
         if self.state.selected == Some(id) {
             leave_text_edit(context);
             self.state.selected = None;
+            self.state.pending_cell_focus = None;
             self.state.scroll_to_marker = None;
             if let (Some(index), Some(last)) = (index, self.session.markers().len().checked_sub(1))
             {
@@ -58,6 +107,7 @@ impl App {
         if let Some(marker) = self.session.markers().get(index) {
             self.state.selected = Some(marker.id);
             self.state.scroll_to_marker = Some(index);
+            self.state.pending_cell_focus = None;
         }
     }
 
@@ -108,11 +158,12 @@ impl App {
         }
         table
             .header(30.0, |mut row| {
-                for heading in ["Pos", "Artist", "Title", ""] {
+                for heading in MarkerColumn::ALL.map(MarkerColumn::label) {
                     row.col(|ui| {
                         ui.label(RichText::new(heading).strong().color(theme::MUTED));
                     });
                 }
+                row.col(|_| {});
             })
             .body(|body| {
                 body.rows(35.0, markers.len(), |mut row| {
@@ -120,8 +171,7 @@ impl App {
                     let id = marker.id;
                     row.set_selected(self.state.selected == Some(id));
                     row.col(|ui| {
-                        let drafts = &mut self.state.positions;
-                        let existing = drafts.get(&id);
+                        let existing = self.state.positions.get(&id);
                         let mut text = existing.map_or_else(
                             || {
                                 marker
@@ -132,11 +182,22 @@ impl App {
                             },
                             |draft| draft.text.clone(),
                         );
-                        let invalid = existing.and_then(|draft| draft.error.as_deref());
-                        let response = field(ui, id, "Pos", &mut text, invalid.is_some())
-                            .on_hover_text(
-                                invalid.unwrap_or("Position in MM:SS, MM:SS.mmm, or MM:SS:FF"),
-                            );
+                        let invalid = existing.is_some_and(|draft| draft.error.is_some());
+                        let response = field(
+                            ui,
+                            &mut self.state,
+                            id,
+                            MarkerColumn::Position,
+                            &mut text,
+                            invalid,
+                        );
+                        let drafts = &mut self.state.positions;
+                        let response = response.on_hover_text(
+                            drafts
+                                .get(&id)
+                                .and_then(|draft| draft.error.as_deref())
+                                .unwrap_or("Position in MM:SS, MM:SS.mmm, or MM:SS:FF"),
+                        );
                         if response.changed() {
                             let parsed = if text.trim().is_empty() {
                                 Ok(None)
@@ -157,9 +218,6 @@ impl App {
                         {
                             drafts.remove(&id);
                         }
-                        if response.clicked() || response.has_focus() {
-                            self.state.selected = Some(id);
-                        }
                     });
                     row.col(|ui| {
                         let mut text = marker.data.artist.clone();
@@ -169,23 +227,31 @@ impl App {
                                 .iter()
                                 .any(|event| matches!(event, egui::Event::Paste(_)))
                         });
-                        let response = field(ui, id, "Artist", &mut text, false)
-                            .on_hover_text("Paste Artist - Title to fill both fields.");
+                        let response = field(
+                            ui,
+                            &mut self.state,
+                            id,
+                            MarkerColumn::Artist,
+                            &mut text,
+                            false,
+                        )
+                        .on_hover_text("Paste Artist - Title to fill both fields.");
                         if response.changed() {
                             commands.push(Command::SetArtist(id, text, pasted));
-                        }
-                        if response.clicked() || response.has_focus() {
-                            self.state.selected = Some(id);
                         }
                     });
                     row.col(|ui| {
                         let mut text = marker.data.title.clone();
-                        let response = field(ui, id, "Title", &mut text, false);
+                        let response = field(
+                            ui,
+                            &mut self.state,
+                            id,
+                            MarkerColumn::Title,
+                            &mut text,
+                            false,
+                        );
                         if response.changed() {
                             commands.push(Command::SetTitle(id, text));
-                        }
-                        if response.clicked() || response.has_focus() {
-                            self.state.selected = Some(id);
                         }
                     });
                     row.col(|ui| {
@@ -219,13 +285,20 @@ fn leave_text_edit(context: &egui::Context) {
 
 fn field(
     ui: &mut egui::Ui,
-    id: MarkerId,
-    label: &str,
+    state: &mut UiState,
+    marker: MarkerId,
+    column: MarkerColumn,
     value: &mut String,
     invalid: bool,
 ) -> egui::Response {
+    let id = column.field_id(marker);
+    let label = column.label();
+    if state.pending_cell_focus == Some(id) {
+        ui.memory_mut(|memory| memory.request_focus(id));
+        state.pending_cell_focus = None;
+    }
     let edit = egui::TextEdit::singleline(value)
-        .id(egui::Id::unique(("audio-markup-marker", id, label)))
+        .id(id)
         .desired_width(f32::INFINITY)
         .hint_text(label);
     let response = ui.add(if invalid {
@@ -235,5 +308,21 @@ fn field(
     });
     ui.ctx()
         .accesskit_node_builder(response.id, |node| node.set_label(label));
+    let active = (Some(marker), column);
+    if (response.clicked() || response.has_focus())
+        && (state.selected, state.active_column) != active
+    {
+        (state.selected, state.active_column) = active;
+        state.pending_cell_focus = None;
+        ui.ctx().request_repaint();
+    }
+    if (state.selected, state.active_column) == active {
+        ui.painter().rect_stroke(
+            response.rect,
+            ui.visuals().widgets.inactive.corner_radius,
+            egui::Stroke::new(2.0, theme::ACCENT),
+            egui::StrokeKind::Inside,
+        );
+    }
     response
 }
