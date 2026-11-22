@@ -178,8 +178,15 @@ jobs:
           GH_TOKEN: ${{ github.token }}
           RELEASE_TAG: ${{ github.event.release.tag_name }}
         run: |
-          gh release upload --repo "$GITHUB_REPOSITORY" -- "$RELEASE_TAG" \
+          asset_tag=${RELEASE_TAG//[^a-zA-Z0-9._-]/-}
+          assets=()
+          for file in \
             dist/AudioMarkup-linux-x86_64.AppImage \
             dist/AudioMarkup-windows-x86_64.zip \
             dist/AudioMarkup-macos-arm64.zip \
-            dist/AudioMarkup-macos-x86_64.zip
+            dist/AudioMarkup-macos-x86_64.zip; do
+            versioned="${file%.*}-${asset_tag}.${file##*.}"
+            mv -- "$file" "$versioned"
+            assets+=("$versioned")
+          done
+          gh release upload --repo "$GITHUB_REPOSITORY" -- "$RELEASE_TAG" "${assets[@]}"
