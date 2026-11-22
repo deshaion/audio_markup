@@ -1,0 +1,15 @@
+[workspace]
+members = ["apps/audio-markup-desktop", "crates/audio-markup-engine", "crates/audio-markup-ui"]
+default-members = ["apps/audio-markup-desktop"]
+resolver = "3"
+
+[workspace.package]
+edition = "2024"
+rust-version = "1.95"
+license = "MIT"
+
+[workspace.dependencies]
+audio-markup-engine = { path = "crates/audio-markup-engine" }
+audio-markup-ui = { path = "crates/audio-markup-ui" }
+eframe = { version = "0.37", default-features = false, features = ["wgpu", "default_fonts", "accesskit", "clipboard", "wayland", "x11"] }
+egui_extras = { version = "0.37", default-features = false }

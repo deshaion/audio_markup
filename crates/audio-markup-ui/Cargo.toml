@@ -1,0 +1,11 @@
+[package]
+name = "audio-markup-ui"
+version = "0.1.0"
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+
+[dependencies]
+audio-markup-engine.workspace = true
+eframe.workspace = true
+egui_extras.workspace = true
