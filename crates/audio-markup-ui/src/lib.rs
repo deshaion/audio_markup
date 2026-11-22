@@ -1,4 +1,5 @@
 mod markers;
+mod shortcuts;
 mod theme;
 
 use std::{
@@ -36,7 +37,9 @@ pub struct App {
 #[derive(Default)]
 struct UiState {
     selected: Option<MarkerId>,
+    scroll_to_marker: Option<usize>,
     positions: HashMap<MarkerId, markers::PositionDraft>,
+    shortcut_help_open: bool,
     error: Option<String>,
     notice: Option<Notice>,
 }
@@ -219,54 +222,6 @@ impl App {
         });
     }
 
-    fn shortcuts(&mut self, context: &egui::Context) {
-        let keys = context.input_mut(|input| {
-            let mut keys = Vec::new();
-            input.events.retain(|event| {
-                if let egui::Event::Key {
-                    key,
-                    pressed: true,
-                    repeat,
-                    modifiers,
-                    ..
-                } = event
-                    && modifiers.matches_exact(egui::Modifiers::ALT)
-                    && matches!(
-                        key,
-                        egui::Key::ArrowUp
-                            | egui::Key::ArrowDown
-                            | egui::Key::ArrowLeft
-                            | egui::Key::ArrowRight
-                            | egui::Key::X
-                            | egui::Key::S
-                    )
-                {
-                    if !repeat || matches!(key, egui::Key::ArrowLeft | egui::Key::ArrowRight) {
-                        keys.push(*key);
-                    }
-                    false
-                } else {
-                    true
-                }
-            });
-            keys
-        });
-        for key in keys {
-            let result = match key {
-                egui::Key::ArrowUp => self.execute(Command::SetPlaying(true)),
-                egui::Key::ArrowDown => self.execute(Command::SetPlaying(false)),
-                egui::Key::ArrowLeft => self.execute(Command::SeekBy(-10)),
-                egui::Key::ArrowRight => self.execute(Command::SeekBy(10)),
-                egui::Key::X => self.capture(),
-                egui::Key::S => self.seek_to_marker(),
-                _ => continue,
-            };
-            if let Err(error) = result {
-                self.state.error = Some(error);
-            }
-        }
-    }
-
     fn toolbar(&mut self, ui: &mut egui::Ui) {
         let opening = self.session.opening();
         let ready = self.session.track().is_some() && !opening;
@@ -306,6 +261,7 @@ impl App {
                 let result = self.split();
                 self.report(result);
             }
+            self.shortcut_help_button(ui);
         });
         ui.add_space(4.0);
         let source = if opening {
@@ -480,6 +436,7 @@ impl eframe::App for App {
         }
         egui::CentralPanel::default().show(ui, |ui| self.marker_table(ui));
         self.show_notice(ui.ctx());
+        self.show_shortcut_help(ui.ctx());
     }
 }
 

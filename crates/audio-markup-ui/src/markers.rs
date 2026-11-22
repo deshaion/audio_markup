@@ -1,8 +1,8 @@
-use audio_markup_engine::{Command, MarkerId, format_marker_time, parse_marker_time};
+use audio_markup_engine::{Command, MarkerId, Result, format_marker_time, parse_marker_time};
 use eframe::egui::{self, RichText};
 use egui_extras::{Column, TableBuilder};
 
-use crate::{App, theme};
+use crate::{App, shortcuts::focused_text_edit, theme};
 
 pub struct PositionDraft {
     text: String,
@@ -10,12 +10,64 @@ pub struct PositionDraft {
 }
 
 impl App {
+    pub(crate) fn move_marker(&mut self, down: bool) {
+        let markers = self.session.markers();
+        let next = match markers
+            .iter()
+            .position(|marker| Some(marker.id) == self.state.selected)
+        {
+            Some(index) if down => Some(index + 1),
+            Some(index) => index.checked_sub(1),
+            None if down => Some(0),
+            None => markers.len().checked_sub(1),
+        };
+        if let Some(index) = next {
+            self.select_marker(index);
+        }
+    }
+
+    pub(crate) fn add_marker(&mut self, context: &egui::Context) -> Result<()> {
+        self.execute(Command::AddMarker)?;
+        leave_text_edit(context);
+        self.select_marker(self.session.markers().len() - 1);
+        Ok(())
+    }
+
+    pub(crate) fn delete_marker(&mut self, context: &egui::Context, id: MarkerId) -> Result<()> {
+        let index = self
+            .session
+            .markers()
+            .iter()
+            .position(|marker| marker.id == id);
+        self.execute(Command::DeleteMarker(id))?;
+        self.state.positions.remove(&id);
+        if self.state.selected == Some(id) {
+            leave_text_edit(context);
+            self.state.selected = None;
+            self.state.scroll_to_marker = None;
+            if let (Some(index), Some(last)) = (index, self.session.markers().len().checked_sub(1))
+            {
+                self.select_marker(index.min(last));
+            }
+        }
+        context.request_repaint();
+        Ok(())
+    }
+
+    fn select_marker(&mut self, index: usize) {
+        if let Some(marker) = self.session.markers().get(index) {
+            self.state.selected = Some(marker.id);
+            self.state.scroll_to_marker = Some(index);
+        }
+    }
+
     pub(crate) fn marker_table(&mut self, ui: &mut egui::Ui) {
         ui.horizontal_wrapped(|ui| {
             ui.heading("Markers");
             ui.separator();
-            if ui.button("Add marker").clicked() {
-                self.dispatch(Command::AddMarker);
+            if ui.button("Add marker").on_hover_text("Alt+N").clicked() {
+                let result = self.add_marker(ui.ctx());
+                self.report(result);
             }
             let ready = self.state.selected.is_some()
                 && self.session.track().is_some()
@@ -41,7 +93,7 @@ impl App {
 
         let markers = self.session.markers();
         let mut commands = Vec::new();
-        TableBuilder::new(ui)
+        let mut table = TableBuilder::new(ui)
             .id_salt("markers")
             .striped(true)
             .resizable(true)
@@ -50,7 +102,11 @@ impl App {
             .column(Column::initial(105.0).range(80.0..=180.0))
             .column(Column::initial(235.0).at_least(105.0))
             .column(Column::remainder().at_least(105.0))
-            .column(Column::exact(72.0))
+            .column(Column::exact(72.0));
+        if let Some(index) = self.state.scroll_to_marker.take() {
+            table = table.scroll_to_row(index, None).animate_scrolling(false);
+        }
+        table
             .header(30.0, |mut row| {
                 for heading in ["Pos", "Artist", "Title", ""] {
                     row.col(|ui| {
@@ -138,18 +194,26 @@ impl App {
                             .on_hover_text("Delete this marker")
                             .clicked()
                         {
-                            self.state.positions.remove(&id);
-                            if self.state.selected == Some(id) {
-                                self.state.selected = None;
-                            }
                             commands.push(Command::DeleteMarker(id));
                         }
                     });
                 })
             });
         for command in commands {
-            self.dispatch(command);
+            match command {
+                Command::DeleteMarker(id) => {
+                    let result = self.delete_marker(ui.ctx(), id);
+                    self.report(result);
+                }
+                command => self.dispatch(command),
+            }
         }
+    }
+}
+
+fn leave_text_edit(context: &egui::Context) {
+    if let Some(id) = focused_text_edit(context) {
+        context.memory_mut(|memory| memory.surrender_focus(id));
     }
 }
 
