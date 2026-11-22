@@ -1,0 +1,185 @@
+name: Build desktop release
+
+on:
+  release:
+    types: [published]
+
+permissions:
+  contents: read
+
+env:
+  RUST_VERSION: '1.96.0'
+
+jobs:
+  build:
+    name: Build ${{ matrix.platform }}
+    runs-on: ${{ matrix.runner }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - platform: linux-x86_64
+            runner: ubuntu-22.04
+            asset: AudioMarkup-linux-x86_64.AppImage
+          - platform: windows-x86_64
+            runner: windows-2025
+            asset: AudioMarkup-windows-x86_64.zip
+          - platform: macos-arm64
+            runner: macos-15
+            asset: AudioMarkup-macos-arm64.zip
+          - platform: macos-x86_64
+            runner: macos-15-intel
+            asset: AudioMarkup-macos-x86_64.zip
+
+    env:
+      RELEASE_ASSET: ${{ matrix.asset }}
+
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          ref: ${{ github.sha }}
+          persist-credentials: false
+
+      - name: Install Linux build and packaging dependencies
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install --no-install-recommends -y libasound2-dev libxkbcommon-dev desktop-file-utils squashfs-tools
+
+      - name: Build Rust desktop app
+        shell: bash
+        run: |
+          rustup toolchain install "$RUST_VERSION" --profile minimal
+          cargo "+$RUST_VERSION" build --locked --release -p audio-markup-desktop
+
+      - name: Package Linux AppImage
+        if: runner.os == 'Linux'
+        shell: bash
+        run: |
+          appdir="$RUNNER_TEMP/AudioMarkup.AppDir"
+          tools="$RUNNER_TEMP/appimage-tools"
+          mkdir -p "$appdir/usr/bin" "$tools" dist
+
+          install -m 755 target/release/audio-markup-desktop "$appdir/usr/bin/audio-markup-desktop"
+          install -m 644 assets/icon.png "$appdir/audio-markup.png"
+          install -Dm 644 LICENSE "$appdir/usr/share/licenses/audio-markup/LICENSE"
+          ln -s usr/bin/audio-markup-desktop "$appdir/AppRun"
+          ln -s audio-markup.png "$appdir/.DirIcon"
+
+          cat > "$appdir/audio-markup.desktop" <<'DESKTOP'
+          [Desktop Entry]
+          Name=Audio Markup
+          Type=Application
+          Exec=audio-markup-desktop
+          Icon=audio-markup
+          Categories=AudioVideo;Audio;AudioVideoEditing;
+          Terminal=false
+          DESKTOP
+          desktop-file-validate "$appdir/audio-markup.desktop"
+
+          curl --fail --location --retry 3 \
+            https://github.com/AppImage/appimagetool/releases/download/1.9.1/appimagetool-x86_64.AppImage \
+            --output "$tools/appimagetool"
+          curl --fail --location --retry 3 \
+            https://github.com/AppImage/type2-runtime/releases/download/20251108/runtime-x86_64 \
+            --output "$tools/runtime-x86_64"
+          (
+            cd "$tools"
+            sha256sum --check <<'CHECKSUMS'
+          ed4ce84f0d9caff66f50bcca6ff6f35aae54ce8135408b3fa33abfc3cb384eb0  appimagetool
+          2fca8b443c92510f1483a883f60061ad09b46b978b2631c807cd873a47ec260d  runtime-x86_64
+          CHECKSUMS
+            chmod +x appimagetool
+            ./appimagetool --appimage-extract > /dev/null
+          )
+
+          ARCH=x86_64 "$tools/squashfs-root/AppRun" --runtime-file "$tools/runtime-x86_64" \
+            "$appdir" "dist/$RELEASE_ASSET"
+
+      - name: Package Windows executable
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          New-Item -ItemType Directory -Path dist | Out-Null
+          Compress-Archive -LiteralPath 'target/release/audio-markup-desktop.exe', 'LICENSE' -DestinationPath "dist/$env:RELEASE_ASSET"
+
+      - name: Package macOS application
+        if: runner.os == 'macOS'
+        shell: bash
+        run: |
+          bundle="$RUNNER_TEMP/Audio Markup.app"
+          contents="$bundle/Contents"
+          iconset="$RUNNER_TEMP/AudioMarkup.iconset"
+          mkdir -p "$contents/MacOS" "$contents/Resources" "$iconset" dist
+          install -m 755 target/release/audio-markup-desktop "$contents/MacOS/audio-markup-desktop"
+          install -m 644 LICENSE "$contents/Resources/LICENSE"
+
+          for size in 16 32 128 256; do
+            sips -z "$size" "$size" assets/icon.png --out "$iconset/icon_${size}x${size}.png" > /dev/null
+            sips -z "$((size * 2))" "$((size * 2))" assets/icon.png --out "$iconset/icon_${size}x${size}@2x.png" > /dev/null
+          done
+          cp assets/icon.png "$iconset/icon_512x512.png"
+          iconutil -c icns "$iconset" -o "$contents/Resources/AudioMarkup.icns"
+
+          package_id=$(cargo "+$RUST_VERSION" pkgid --locked -p audio-markup-desktop)
+          version=${package_id##*#}
+          version=${version##*@}
+          version=${version%%-*}
+          version=${version%%+*}
+          cat > "$contents/Info.plist" <<PLIST
+          <?xml version="1.0" encoding="UTF-8"?>
+          <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+          <plist version="1.0">
+          <dict>
+            <key>CFBundleName</key>
+            <string>Audio Markup</string>
+            <key>CFBundleIdentifier</key>
+            <string>com.audio-markup.desktop</string>
+            <key>CFBundleExecutable</key>
+            <string>audio-markup-desktop</string>
+            <key>CFBundleIconFile</key>
+            <string>AudioMarkup.icns</string>
+            <key>CFBundlePackageType</key>
+            <string>APPL</string>
+            <key>CFBundleShortVersionString</key>
+            <string>$version</string>
+            <key>CFBundleVersion</key>
+            <string>$version</string>
+          </dict>
+          </plist>
+          PLIST
+          plutil -lint "$contents/Info.plist"
+          codesign --force --sign - "$bundle"
+          codesign --verify --strict "$bundle"
+          ditto -c -k --keepParent "$bundle" "dist/$RELEASE_ASSET"
+
+      - name: Save packaged build
+        uses: actions/upload-artifact@v7
+        with:
+          name: release-${{ matrix.platform }}
+          path: dist/${{ matrix.asset }}
+          if-no-files-found: error
+
+  attach:
+    name: Attach builds to the release
+    needs: build
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/download-artifact@v8
+        with:
+          pattern: release-*
+          path: dist
+          merge-multiple: true
+
+      - name: Upload release assets
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RELEASE_TAG: ${{ github.event.release.tag_name }}
+        run: |
+          gh release upload --repo "$GITHUB_REPOSITORY" -- "$RELEASE_TAG" \
+            dist/AudioMarkup-linux-x86_64.AppImage \
+            dist/AudioMarkup-windows-x86_64.zip \
+            dist/AudioMarkup-macos-arm64.zip \
+            dist/AudioMarkup-macos-x86_64.zip
