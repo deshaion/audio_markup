@@ -409,7 +409,7 @@ dependencies = [
 
 [[package]]
 name = "audio-markup-desktop"
-version = "0.1.0"
+version = "0.2.1"
 dependencies = [
  "audio-markup-engine",
  "audio-markup-ui",
